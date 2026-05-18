@@ -19,20 +19,20 @@
 #define PORT 8080
 #define BUFF_SIZE 2048
 #define CLIENTS_COUNT 10
-#define HISTORY_SIZE  100
+#define MAX_HISTORY   100
 #define PROMPT "Server> "
 
 /*Global variables*/
 char Shell_Command[BUFF_SIZE];
-char PS[BUFF_SIZE];
-char History[HISTORY_SIZE][BUFF_SIZE];
 struct sockaddr_in address;
 socklen_t add_size = sizeof(address);
 int opt = 1;
+int* history_baund;
 int client_fd;
 char* IP;
-
-/*Struct*/
+int* Listen;
+int *Server_Time;
+/*Structs*/
 typedef struct Clients {
     int socket;
     char ip[INET_ADDRSTRLEN];
@@ -43,14 +43,31 @@ typedef struct Clients {
 
 Tclients *Clients;
 
+typedef struct {
+    int pid;
+    char command[BUFF_SIZE];
+    char result[BUFF_SIZE];
+} S_History;
+
+S_History *History;
+
+typedef struct {
+    int pid;
+    char command[BUFF_SIZE];
+    time_t start;
+} PS;
+
+PS *Processes;
 void Server_Up()
 {
-    printf("Server is running\n");
+    printf("Server is Listen\n");
+    *Listen = 1;
 }
 
 void Server_Down()
 {
-    exit(0);
+    printf("Server dont Listen\n");
+    *Listen = 0;
 }
 
 void clients()
@@ -67,7 +84,7 @@ void clients()
 
 void Status()
 {
-    printf("ID       PORT      IP\n");
+    printf("ID       PORT           IP\n");
     int id = 0;
     for(int i = 0; i < CLIENTS_COUNT; i++) {
         id++;
@@ -79,12 +96,28 @@ void Status()
 
 void ps()
 {
-    printf("%s\n", PS);
+    printf("PID       COMMAND     TIME\n");
+    for(int i = 0; i < CLIENTS_COUNT; i++) {
+        if (Processes[i].pid != 0) {
+            printf("%d        %s          %ld second\n", Processes[i].pid, Processes[i].command, Processes[i].start - (*Server_Time));
+        }
+    }
 }
 
 void history()
 {
+    int curr_indx = *history_baund;
+    curr_indx ++;
+    printf("%-10s  %-30s  %-30s \n", "PID", "COMMAND", "RESULT");
 
+    do
+    {
+        if (History[curr_indx].pid != 0)
+            printf("%-10d  %-30s  %.30s \n", History[curr_indx].pid, History[curr_indx].command, History[curr_indx].result);
+        curr_indx++;
+        curr_indx %= MAX_HISTORY;
+    }
+    while (curr_indx != (*history_baund));
 }
 
 void Remove_Client(int new_client)
@@ -94,6 +127,31 @@ void Remove_Client(int new_client)
 
         if (Clients[i].socket == new_client) {
             Clients[i].socket = 0;
+            strcmp(History[(*history_baund)].result,"Disconnected");
+            break;
+        }
+    }
+}
+
+void Remove_Processe(int pid) 
+{
+
+    for(int i = 0; i < CLIENTS_COUNT; i++) {
+        if (Processes[i].pid == pid) {
+            Processes[i].pid = 0;
+            break;
+        }
+    }
+}
+
+void Add_Processe(int pid, char* command) 
+{
+
+    for(int i = 0; i < CLIENTS_COUNT; i++) {
+        if (Processes[i].pid == 0) {
+            Processes[i].pid = pid;
+            strcpy(Processes[i].command, command);
+            time(&Processes[i].start);
             break;
         }
     }
@@ -103,8 +161,9 @@ void Client_Command()
 {
     memset(Shell_Command, 0, BUFF_SIZE);
     int bytes = recv(client_fd , Shell_Command, BUFF_SIZE - 1, 0);
+
     Shell_Command[bytes] = '\0';
-    Shell_Command[strcspn(Shell_Command, "\r\n")] = '\0';
+    Shell_Command[strcspn(Shell_Command, "\n")] = '\0';
 
     if (strncmp(Shell_Command, "shell", 5) == 0) {
         char Formated_Command[BUFF_SIZE * 2];
@@ -113,20 +172,42 @@ void Client_Command()
         memset(buffer, 0, BUFF_SIZE);
         
         char* pcmd = Shell_Command + 6;
-        pcmd[strcspn(pcmd, "\r\n")] = '\0';
+        pcmd[strcspn(pcmd, "\n")] = '\0';
+
+        History[(*history_baund)].pid =  getpid();
+        strcpy(History[(*history_baund)].command,pcmd);
 
         snprintf(Formated_Command, sizeof(Formated_Command), "%s 2>&1", pcmd);
+        Add_Processe(getpid(), pcmd);
+
         FILE* pf;
         pf = popen(Formated_Command, "r");       
         while(fgets(buffer, sizeof(buffer), pf) != NULL) {
+
             send(client_fd, buffer, strlen(buffer), 0);
+            buffer[strcspn(buffer, "\n")] = ';';
+
+            strcat(History[(*history_baund)].result,buffer);
             memset(buffer, 0, BUFF_SIZE);
         }
+
+        (*history_baund) ++;
+        (*history_baund) %= MAX_HISTORY;
+
         strcpy(buffer, "NULL");
         send(client_fd, buffer, strlen(buffer), 0);
+
         pclose(pf);
+        Remove_Processe(getpid());
     } else if (strcmp(Shell_Command, "disconnect") == 0) {
+
+        History[(*history_baund)].pid =  getpid();
+        strcpy(History[(*history_baund)].command,Shell_Command);
         Remove_Client(client_fd);
+        
+        (*history_baund) ++ ;
+        (*history_baund) %= MAX_HISTORY;
+
         close(client_fd);
         exit(0);
     }
@@ -159,7 +240,7 @@ void Server_CLI()
             Status();
         } else {
             printf("Usage:\n");
-            printf("COMMAND                     DESCRIPTION\n");
+            printf("COMMAND                    DESCRIPTION\n");
             printf("up                         Start server\n"); 
             printf("down                       Stop server\n");
             printf("clients                    Show connection list\n");
@@ -173,6 +254,9 @@ void Server_CLI()
 void Add_Client(int new_client)
 {
     struct sockaddr_in add;
+    History[(*history_baund)].pid =  getpid();
+    strcpy(History[(*history_baund)].command,"Connect");
+
     int res = getpeername(new_client, (struct sockaddr *)&add, &add_size);
     char ip[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &add.sin_addr, ip, INET_ADDRSTRLEN);
@@ -187,19 +271,40 @@ void Add_Client(int new_client)
             Clients[i].port = ntohs(add.sin_port);
             Clients[i].pid = getpid();
             strcpy(Clients[i].ip, ip);
+            strcpy(History[(*history_baund)].result,"Connected");
             break;
         }
     }
-    printf("\nClient connected. Port: %u  IP: %s\n", ntohs(add.sin_port), ip);
+    (*history_baund) ++ ;
+    (*history_baund) %= MAX_HISTORY;
+    if (Listen == 1)
+        printf("\nClient connected. Port: %u  IP: %s\n", ntohs(add.sin_port), ip);
 }
 
 int main(int argc, char* argv[])
 {
-
+    /*Shered Memoey*/
     Clients = mmap(NULL, sizeof(Tclients) * CLIENTS_COUNT, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-
     memset(Clients, 0, sizeof(Tclients) * CLIENTS_COUNT);
 
+    Processes = mmap(NULL, sizeof(PS) * CLIENTS_COUNT, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    memset(Processes, 0, sizeof(PS) * CLIENTS_COUNT);
+
+    History = mmap(NULL, sizeof(S_History) * MAX_HISTORY, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    memset(History, 0, sizeof(S_History) * MAX_HISTORY);
+
+    history_baund = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    memset(history_baund, 0, sizeof(int));
+
+    Listen = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    memset(Listen, 0, sizeof(int));
+
+    Server_Time = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    memset(Server_Time, 0, sizeof(int));
+    time_t t;
+    time(&t);
+    *Server_Time = t;
+    /*IP addres chacking*/
     if (argc > 1) {
         IP = argv[1];
         while (!inet_pton(AF_INET, IP, &(address.sin_addr))) {
@@ -210,10 +315,9 @@ int main(int argc, char* argv[])
     } else {
         IP = "127.0.0.1";
     }
-
     pid_t pid = fork();
 
-    if (pid == 0 )
+    if (pid == 0)
     {
         Server_CLI();
         exit(0);
@@ -222,57 +326,61 @@ int main(int argc, char* argv[])
     printf("\nSERVER CLI\n");
 
     /*Creating server socket*/
-
     int server_fd;
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        printf("Error: %s \n", strerror(errno));
-        return 0;
-    }
 
-    /*Adding server config*/
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt));
+        if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+            printf("Error: %s \n", strerror(errno));
+            return 0;
+        }
 
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = inet_addr(IP);
-    address.sin_port = htons(PORT);
+        /*Adding server config*/
+        setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt));
 
-    /* Making server socket to listening mode*/
-    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        printf("Error: %s \n", strerror(errno));
-    }
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = inet_addr(IP);
+        address.sin_port = htons(PORT);
 
-    if (listen(server_fd, 3) < 0) {
-
-        printf("Error: %s \n", strerror(errno));
-    }
-
-    while (1) {
-
-        struct sockaddr_in client_address;
-
-        client_fd = accept(server_fd, (struct sockaddr*)&client_address, &add_size);
-
-        Add_Client(client_fd);
-        pid_t new_pid = fork();
-
-        if(new_pid == 0) {
-
-            close(server_fd);
-
-            while (1) {
-                Client_Command();
-            }
-            /*
-            while (waitpid(-1, NULL, WNOHANG)) {
-                Client_Command();
-            }*/
-
-            exit(0);
-
-        } else if (new_pid > 0) {
-            continue;
-        } else {
+        /* Making server socket to listening mode*/
+        if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
+            printf("Error: %s \n", strerror(errno));
+            return 0;
+        }
+        if (listen(server_fd, 3) < 0) {
             printf("Error: %s \n", strerror(errno));
         }
-    }
+
+
+        while (1) {
+
+            struct sockaddr_in client_address;
+
+            client_fd = accept(server_fd, (struct sockaddr*)&client_address, &add_size);
+
+            Add_Client(client_fd);
+            if (*Listen == 0) {
+                send(client_fd, "SERVER DOWN", 11, 0);
+            } else {
+                send(client_fd, "SERVER   UP", 11, 0);
+            }
+
+                pid_t new_pid = fork();
+
+                if(new_pid == 0) {
+
+                    close(server_fd);
+
+                    while (1) {
+
+                        Client_Command();
+                    }
+                    exit(0);
+
+                } else if (new_pid > 0) {
+                    continue;
+
+                } else {
+                    printf("Error: %s \n", strerror(errno));
+
+                }
+            }
 }
