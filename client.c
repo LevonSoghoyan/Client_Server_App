@@ -57,7 +57,11 @@ void Connect(char* IP)
     recv(client_fd, buf, 11, 0);
 
     if (strcmp(buf,"SERVER DOWN") == 0) {
-        Deactivate();
+        Deactivate("SERVER DOWN");
+    } else if (strcmp(buf,"SERVER FULL") == 0) {
+        Deactivate("SERVER FULL");
+    } else if (strcmp(buf,"SERVER STOP") == 0) {
+        Deactivate("SERVER STOP");
     } else
     Status();  
 
@@ -86,11 +90,11 @@ void Shell(char* command)
     return;
 }
 
-void Deactivate()
+void Deactivate(char* message)
 {
     char* command = "disconnect";
     Shell(command);
-    printf("Server Down\n");
+    printf("%s\n", message);
     close(client_fd);
     client_fd = -1;
 }
@@ -106,6 +110,7 @@ void D_connect()
 
 void hendle(int sig)
 {
+    printf("SIGINT\n");
     char* command = "disconnect";
     Shell(command);
     send(client_fd,"SIGINT",6,0);
@@ -125,13 +130,13 @@ int main(int argc, char* argv[])
 
         char* input = readline(PROMPT);
         strncpy(buf, input, BUFF_SIZE -1);   
-        add_history(input);
 
         signal(SIGINT,hendle);
 
         int No_Alpha = 0;
-        while (isalpha(buf[No_Alpha]) == 0) 
+        while (No_Alpha < strlen(buf) && isalpha(buf[No_Alpha]) == 0) 
             No_Alpha++;
+
 
         for (int i = 0; i < BUFF_SIZE - No_Alpha; i++)
             buf[i] = buf[i + No_Alpha];
@@ -139,12 +144,17 @@ int main(int argc, char* argv[])
         if (strlen(buf) <= 1)
             continue;
 
+        add_history(buf);
+
         char *token;
         token = strtok(buf, " ");
         token[strcspn(token,"\n")] = '\0';
 
         if (strcmp(token, "connect") == 0) {
-            Connect((buf + strlen(token) + 1));
+            if (client_fd != -1)
+                printf("Client already connected\n");
+            else
+                Connect((buf + strlen(token) + 1));
         } else if (!client_fd) {
             printf("Client disconnected\n");
         } else if (strcmp(token, "shell") == 0) {
