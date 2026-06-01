@@ -20,7 +20,7 @@
 
 /*MACROS*/
 #define PORT 8088
-#define BUFF_SIZE 2048
+#define BUFF_SIZE 20048
 #define CLIENTS_COUNT 5
 #define MAX_HISTORY   100
 #define PROMPT "Server> "
@@ -210,13 +210,22 @@ void Client_Command()
 
                 if (FD_ISSET(client_fd, &read_fds)) {
                     int n = recv(client_fd, io_buf, sizeof(io_buf), 0);
-                    if (n <= 0) break;
+                    if (n <= 0)
+                    {
+                        break;
+                    }
                     if (write(master_fd, io_buf, n) < 0) break;
                 }
 
                 if (FD_ISSET(master_fd, &read_fds)) {
                     int n = read(master_fd, io_buf, sizeof(io_buf));
-                    if (n <= 0) break;
+                    if (n <= 0)
+                    {
+                        char eot = 0x04;
+                        write(client_fd, &eot, 1);
+                        break;
+                        //shutdown(client_fd, SHUT_WR);
+                    }
                     if (send(client_fd, io_buf, n, 0) < 0) break;
 
                     if (strlen(History[(*history_baund)].result) < BUFF_SIZE - n - 1) {
@@ -226,13 +235,12 @@ void Client_Command()
             }
         }
 
-
         (*history_baund) ++;
         (*history_baund) %= MAX_HISTORY;
         strcpy(io_buf, "NULL");
         close(master_fd);
         kill(pid, SIGKILL);
-        waitpid(pid, NULL, 0);
+        //waitpid(pid, NULL, 0);
         Remove_Processe(pid);
 
     } else if (strcmp(Shell_Command, "disconnect") == 0) {

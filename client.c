@@ -15,7 +15,7 @@
 
 /*MACROS*/
 #define PORT 8088
-#define BUFF_SIZE 2048
+#define BUFF_SIZE 20048
 #define PROMPT "Client> "
 
 /*Structs*/
@@ -27,18 +27,19 @@ int client_fd = -1;
 struct sockaddr_in server_addr;
 socklen_t addr_len = sizeof(server_addr);
 
-void reser_terminal_mode() 
+void reset_terminal_mode() 
 {
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &origin_termios);
 }
 
 void raw_mode() 
 {
+    if (!isatty(STDIN_FILENO)) return;
     if (tcgetattr(STDIN_FILENO, &origin_termios) < 0) {
         exit(EXIT_FAILURE);
     }
 
-    atexit(reser_terminal_mode);
+    atexit(reset_terminal_mode);
 
     struct termios raw = origin_termios;
     raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
@@ -46,6 +47,8 @@ void raw_mode()
     raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
 
     raw.c_oflag &= ~(OPOST);
+
+    raw.c_cc[VEOF] = 4;
 
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) {
         exit(EXIT_FAILURE);
@@ -150,6 +153,8 @@ void hendle(int sig)
 int main(int argc, char* argv[])
 {
     printf("\nCLIENT CLI\n");
+    signal(SIGPIPE,SIG_IGN);
+    signal(SIGINT,hendle);
 
     /*Adding server configurations*/
     server_addr.sin_family = AF_INET;
@@ -159,9 +164,8 @@ int main(int argc, char* argv[])
     while(1) {
 
         char* input = readline(PROMPT);
+        if (!input) break;
         strncpy(buf, input, BUFF_SIZE -1);   
-
-        signal(SIGINT,hendle);
 
         int No_Alpha = 0;
         while (No_Alpha < strlen(buf) && isalpha(buf[No_Alpha]) == 0) 
@@ -187,12 +191,21 @@ int main(int argc, char* argv[])
                 Connect((buf + strlen(token) + 1));
         } else if (!client_fd) {
             printf("Client disconnected\n");
+
         } else if (strcmp(token, "shell") == 0) {
-            
-            send(client_fd, buf, BUFF_SIZE, 0);
+
+
+            if (send(client_fd, buf, BUFF_SIZE, 0) < 0) {
+                printf("Error: Connection lost.\n");
+                close(client_fd);
+                client_fd = -1;
+                continue;
+            }
+
             raw_mode();
             fd_set read_fds;
             int max_fd = (client_fd > STDIN_FILENO) ? client_fd : STDIN_FILENO;
+            int server_dead = 0;
 
             while (1) {
                 FD_ZERO(&read_fds);
@@ -204,21 +217,37 @@ int main(int argc, char* argv[])
                 }
                 if (FD_ISSET(STDIN_FILENO, &read_fds)) {
                     ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
-                    if (n <= 0)
+                    if (n <= 0) break;
+                    if (write(client_fd, buf, n) < 0) {
+                        server_dead = 1;
                         break;
-                    if (write(client_fd, buf,n) < 0) 
-                        break;
+                    }
                 }
 
                 if (FD_ISSET(client_fd, &read_fds)) {
                     ssize_t n = read(client_fd, buf, sizeof(buf));
-                    if (n <= 0)
+                    if (n <= 0) {
+                        server_dead = 1;
                         break;
-                    if (write(STDOUT_FILENO, buf,n) < 0) 
+                    }
+
+                    if (n == 1 && buf[0] == 0x04) {
+                        break; 
+                    }
+
+                    if (write(STDOUT_FILENO, buf, n) < 0) 
                         break;
                 }
             }
 
+            reset_terminal_mode(); 
+            printf("\n");
+
+            if (server_dead) {
+                printf("Connection lost. Server shut down.\n");
+                close(client_fd);
+                client_fd = -1;
+            }
         } else if (strcmp(token, "disconnect") == 0) {
             D_connect();
         } else if (strcmp(token, "status") == 0) {
