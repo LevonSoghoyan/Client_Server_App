@@ -5,9 +5,9 @@ SRC = client.c server.c
 
 
 server:$(SERVER_OBJ)
-	$(CC) $(SERVER_OBJ) -o SERVER -lreadline
+	$(CC) $(SERVER_OBJ) -o SERVER -lreadline -lutil
 client:$(CLIENT_OBJ)
-	$(CC) $(CLIENT_OBJ) -o CLIENT -lreadline
+	$(CC) $(CLIENT_OBJ) -o CLIENT -lreadline -lutil
 
 clean:
 	rm -f *.o CLIENT SERVER 

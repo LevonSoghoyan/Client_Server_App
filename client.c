@@ -1,5 +1,7 @@
 /*INCLUDES*/
 #include <stdio.h>
+#include <termios.h>
+#include <sys/select.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -12,15 +14,43 @@
 #include <arpa/inet.h>
 
 /*MACROS*/
-#define PORT 8080
+#define PORT 8088
 #define BUFF_SIZE 2048
-
 #define PROMPT "Client> "
+
+/*Structs*/
+struct termios origin_termios;
+
 /*Global variables*/
 char buf[BUFF_SIZE];
 int client_fd = -1;
 struct sockaddr_in server_addr;
 socklen_t addr_len = sizeof(server_addr);
+
+void reser_terminal_mode() 
+{
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &origin_termios);
+}
+
+void raw_mode() 
+{
+    if (tcgetattr(STDIN_FILENO, &origin_termios) < 0) {
+        exit(EXIT_FAILURE);
+    }
+
+    atexit(reser_terminal_mode);
+
+    struct termios raw = origin_termios;
+    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+
+    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+
+    raw.c_oflag &= ~(OPOST);
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) {
+        exit(EXIT_FAILURE);
+    }
+}
 
 void Status()
 {
@@ -158,7 +188,37 @@ int main(int argc, char* argv[])
         } else if (!client_fd) {
             printf("Client disconnected\n");
         } else if (strcmp(token, "shell") == 0) {
-            Shell(buf);
+            
+            send(client_fd, buf, BUFF_SIZE, 0);
+            raw_mode();
+            fd_set read_fds;
+            int max_fd = (client_fd > STDIN_FILENO) ? client_fd : STDIN_FILENO;
+
+            while (1) {
+                FD_ZERO(&read_fds);
+                FD_SET(client_fd, &read_fds);
+                FD_SET(STDIN_FILENO, &read_fds);
+
+                if (select(max_fd + 1, &read_fds, NULL, NULL, NULL) < 0) {
+                    break;
+                }
+                if (FD_ISSET(STDIN_FILENO, &read_fds)) {
+                    ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+                    if (n <= 0)
+                        break;
+                    if (write(client_fd, buf,n) < 0) 
+                        break;
+                }
+
+                if (FD_ISSET(client_fd, &read_fds)) {
+                    ssize_t n = read(client_fd, buf, sizeof(buf));
+                    if (n <= 0)
+                        break;
+                    if (write(STDOUT_FILENO, buf,n) < 0) 
+                        break;
+                }
+            }
+
         } else if (strcmp(token, "disconnect") == 0) {
             D_connect();
         } else if (strcmp(token, "status") == 0) {

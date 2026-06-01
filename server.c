@@ -1,5 +1,7 @@
 /*INCLUDES*/ 
 #include <time.h>
+#include <pty.h>
+#include <sys/select.h>
 #include <stdio.h>
 #include <sys/mman.h>
 #include <fcntl.h>
@@ -17,7 +19,7 @@
 #include <netinet/in.h>
 
 /*MACROS*/
-#define PORT 8080
+#define PORT 8088
 #define BUFF_SIZE 2048
 #define CLIENTS_COUNT 5
 #define MAX_HISTORY   100
@@ -163,45 +165,76 @@ void Add_Processe(int pid, char* command)
 void Client_Command()
 {
     memset(Shell_Command, 0, BUFF_SIZE);
-    int bytes = recv(client_fd , Shell_Command, BUFF_SIZE - 1, 0);
 
+    int bytes = recv(client_fd , Shell_Command, BUFF_SIZE - 1, 0);
     Shell_Command[bytes] = '\0';
     Shell_Command[strcspn(Shell_Command, "\n")] = '\0';
 
+    int master_fd;
+    char io_buf[BUFF_SIZE];
+    char* pcmd = Shell_Command + 6;
+    char Formated_Command[BUFF_SIZE * 2];
+
+    memset(io_buf, 0, BUFF_SIZE);
+    History[(*history_baund)].pid =  getpid();
+    strcpy(History[(*history_baund)].command,pcmd);
+
+    snprintf(Formated_Command, sizeof(Formated_Command), "%s 2>&1", pcmd);
+    Add_Processe(getpid(), pcmd);
+
     if (strncmp(Shell_Command, "shell", 5) == 0) {
-        char Formated_Command[BUFF_SIZE * 2];
-        char buffer[BUFF_SIZE];
+        pid_t pid = forkpty(&master_fd, NULL, NULL, NULL);
 
-        memset(buffer, 0, BUFF_SIZE);
-        
-        char* pcmd = Shell_Command + 6;
-        pcmd[strcspn(pcmd, "\n")] = '\0';
+        if (pid == 0) {
+            setenv("TERM", "xterm", 1);
 
-        History[(*history_baund)].pid =  getpid();
-        strcpy(History[(*history_baund)].command,pcmd);
+            if (strlen(Shell_Command) <= 6) {
+                execl("/bin/bash", "bash", "-i", NULL);
+            } else {
+                execl("/bin/bash", "bash", "-c", pcmd, NULL);
+            }
 
-        snprintf(Formated_Command, sizeof(Formated_Command), "%s 2>&1", pcmd);
-        Add_Processe(getpid(), pcmd);
+            exit(1);  
+        } else {
+            fd_set read_fds;
+            int max_fd = (client_fd > master_fd) ? client_fd : master_fd;
 
-        FILE* pf;
-        pf = popen(Formated_Command, "r");       
-        while(fgets(buffer, sizeof(buffer), pf) != NULL) {
+            while(1) {
+                FD_ZERO(&read_fds);
+                FD_SET(client_fd, &read_fds);
+                FD_SET(master_fd, &read_fds);
 
-            send(client_fd, buffer, strlen(buffer), 0);
-            buffer[strcspn(buffer, "\n")] = ';';
+                if (select(max_fd + 1, &read_fds, NULL, NULL, NULL) < 0 ) {
+                    break;
+                }
 
-            strcat(History[(*history_baund)].result,buffer);
-            memset(buffer, 0, BUFF_SIZE);
+                if (FD_ISSET(client_fd, &read_fds)) {
+                    int n = recv(client_fd, io_buf, sizeof(io_buf), 0);
+                    if (n <= 0) break;
+                    if (write(master_fd, io_buf, n) < 0) break;
+                }
+
+                if (FD_ISSET(master_fd, &read_fds)) {
+                    int n = read(master_fd, io_buf, sizeof(io_buf));
+                    if (n <= 0) break;
+                    if (send(client_fd, io_buf, n, 0) < 0) break;
+
+                    if (strlen(History[(*history_baund)].result) < BUFF_SIZE - n - 1) {
+                        strncat(History[(*history_baund)].result, io_buf, n);
+                    }
+                }
+            }
         }
+
 
         (*history_baund) ++;
         (*history_baund) %= MAX_HISTORY;
+        strcpy(io_buf, "NULL");
+        close(master_fd);
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        Remove_Processe(pid);
 
-        strcpy(buffer, "NULL");
-        send(client_fd, buffer, strlen(buffer), 0);
-
-        pclose(pf);
-        Remove_Processe(getpid());
     } else if (strcmp(Shell_Command, "disconnect") == 0) {
 
         History[(*history_baund)].pid =  getpid();
