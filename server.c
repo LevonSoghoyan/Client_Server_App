@@ -44,7 +44,6 @@ typedef struct Clients {
     int pid;
     char time[30];
 } Tclients;
-
 Tclients *Clients;
 
 typedef struct {
@@ -52,7 +51,6 @@ typedef struct {
     char command[BUFF_SIZE];
     char result[BUFF_SIZE];
 } S_History;
-
 S_History *History;
 
 typedef struct {
@@ -60,8 +58,9 @@ typedef struct {
     char command[BUFF_SIZE];
     time_t start;
 } PS;
-
 PS *Processes;
+
+
 void Server_Up()
 {
     printf("Server is Listen\n");
@@ -176,14 +175,13 @@ void Client_Command()
     char Formated_Command[BUFF_SIZE * 2];
 
     memset(io_buf, 0, BUFF_SIZE);
-    History[(*history_baund)].pid =  getpid();
     strcpy(History[(*history_baund)].command,pcmd);
-
     snprintf(Formated_Command, sizeof(Formated_Command), "%s 2>&1", pcmd);
-    Add_Processe(getpid(), pcmd);
 
     if (strncmp(Shell_Command, "shell", 5) == 0) {
+
         pid_t pid = forkpty(&master_fd, NULL, NULL, NULL);
+        Add_Processe(pid, pcmd);
 
         if (pid == 0) {
             setenv("TERM", "xterm", 1);
@@ -200,6 +198,7 @@ void Client_Command()
             int max_fd = (client_fd > master_fd) ? client_fd : master_fd;
 
             while(1) {
+
                 FD_ZERO(&read_fds);
                 FD_SET(client_fd, &read_fds);
                 FD_SET(master_fd, &read_fds);
@@ -224,7 +223,6 @@ void Client_Command()
                         char eot = 0x04;
                         write(client_fd, &eot, 1);
                         break;
-                        //shutdown(client_fd, SHUT_WR);
                     }
                     if (send(client_fd, io_buf, n, 0) < 0) break;
 
@@ -235,12 +233,13 @@ void Client_Command()
             }
         }
 
+        History[(*history_baund)].pid =  getpid();
         (*history_baund) ++;
         (*history_baund) %= MAX_HISTORY;
         strcpy(io_buf, "NULL");
         close(master_fd);
         kill(pid, SIGKILL);
-        //waitpid(pid, NULL, 0);
+        waitpid(pid, NULL, 0);
         Remove_Processe(pid);
 
     } else if (strcmp(Shell_Command, "disconnect") == 0) {
@@ -248,7 +247,7 @@ void Client_Command()
         History[(*history_baund)].pid =  getpid();
         strcpy(History[(*history_baund)].command,Shell_Command);
         Remove_Client(client_fd);
-        
+
         (*history_baund) ++ ;
         (*history_baund) %= MAX_HISTORY;
 

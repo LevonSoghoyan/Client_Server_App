@@ -195,7 +195,7 @@ int main(int argc, char* argv[])
         } else if (strcmp(token, "shell") == 0) {
 
 
-            if (send(client_fd, buf, BUFF_SIZE, 0) < 0) {
+            if (send(client_fd, buf, strlen(buf), 0) < 0) {
                 printf("Error: Connection lost.\n");
                 close(client_fd);
                 client_fd = -1;
@@ -208,6 +208,7 @@ int main(int argc, char* argv[])
             int server_dead = 0;
 
             while (1) {
+
                 FD_ZERO(&read_fds);
                 FD_SET(client_fd, &read_fds);
                 FD_SET(STDIN_FILENO, &read_fds);
@@ -241,8 +242,6 @@ int main(int argc, char* argv[])
             }
 
             reset_terminal_mode(); 
-            printf("\n");
-
             if (server_dead) {
                 printf("Connection lost. Server shut down.\n");
                 close(client_fd);
